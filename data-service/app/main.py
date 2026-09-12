@@ -6,7 +6,11 @@ state. Injected events just append distinctively-typed rows.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
+import re
+import secrets
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date
@@ -54,6 +58,14 @@ def init_and_seed() -> None:
                 is_anomaly INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_txn_customer ON transactions(customer_id);
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                customer_id INTEGER REFERENCES customers(id),
+                created_at TEXT NOT NULL
+            );
             """
         )
         already = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
@@ -73,9 +85,46 @@ def init_and_seed() -> None:
                     [(cid, t["date"], t["amount"], t["type"], t["description"],
                       t["is_anomaly"]) for t in c["transactions"]],
                 )
+        # Seed one login per persona so the demo has real accounts to sign in with.
+        # Names deliberately match the email prefix — no faker-generated aliases,
+        # so "ramesh@saarthi.in" logs in as "Ramesh Kumar".
+        users_already = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if not users_already:
+            today = date.today().isoformat()
+            seed_creds = [
+                (1, "ramesh@saarthi.in", "ramesh@123", "Ramesh Kumar"),
+                (2, "priya@saarthi.in",  "priya@123",  "Priya Sharma"),
+                (3, "amit@saarthi.in",   "amit@123",   "Amit Patel"),
+                (4, "sunita@saarthi.in", "sunita@123", "Sunita Devi"),
+            ]
+            for cid, email, pwd, real_name in seed_creds:
+                # Skip if the customer row is missing (defensive).
+                if not conn.execute("SELECT 1 FROM customers WHERE id=?", (cid,)).fetchone():
+                    continue
+                # Replace the generator's faker name so the display name matches
+                # the credential used to log in.
+                conn.execute("UPDATE customers SET name=? WHERE id=?", (real_name, cid))
+                salt = secrets.token_hex(16)
+                pwd_hash = _hash_password(pwd, salt)
+                conn.execute(
+                    "INSERT INTO users (email, password_hash, salt, customer_id,"
+                    " created_at) VALUES (?,?,?,?,?)",
+                    (email, pwd_hash, salt, cid, today),
+                )
         conn.commit()
     finally:
         conn.close()
+
+
+def _hash_password(password: str, salt: str) -> str:
+    """PBKDF2-HMAC-SHA256, stdlib only. 100k iters is enough for a demo."""
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000
+    ).hex()
+
+
+def _verify_password(password: str, salt: str, expected_hash: str) -> bool:
+    return hmac.compare_digest(_hash_password(password, salt), expected_hash)
 
 
 @asynccontextmanager
@@ -311,5 +360,117 @@ def get_transactions_canonical(customer_id: int):
             "SELECT * FROM transactions WHERE customer_id = ?", (customer_id,)
         ).fetchall()
         return _to_canonical_txns(customer, rows)
+    finally:
+        conn.close()
+
+
+# ===================================================================
+# Auth — demo-grade only. Password hashing (PBKDF2) is real; there is
+# no JWT/session — the frontend keeps a customer_id in localStorage.
+# ponytail: no tokens, browser holds the identity. Upgrade path: swap
+# to signed cookies / JWT when this ever leaves demo land.
+# ===================================================================
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: str
+    occupation: str = "Salaried"
+    city: str = "Bengaluru"
+    monthly_income: int = 40000
+    persona_type: str = "stable_salaried"
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    customer_id: int
+    email: str
+    name: str
+
+
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+
+
+def _email_norm(email: str) -> str:
+    return email.strip().lower()
+
+
+def _valid_email(email: str) -> bool:
+    return bool(_EMAIL_RE.match(email)) and len(email) <= 254
+
+
+@app.post("/auth/register", response_model=AuthResponse)
+def register(body: RegisterRequest):
+    email = _email_norm(body.email)
+    if not _valid_email(email):
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Please provide your name.")
+    conn = get_db()
+    try:
+        if conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
+            raise HTTPException(status_code=409, detail="email already registered")
+        today = date.today().isoformat()
+        cur = conn.execute(
+            "INSERT INTO customers (name, persona_type, occupation, city,"
+            " monthly_income, created_at) VALUES (?,?,?,?,?,?)",
+            (body.name, body.persona_type, body.occupation, body.city,
+             body.monthly_income, today),
+        )
+        customer_id = cur.lastrowid
+        salt = secrets.token_hex(16)
+        conn.execute(
+            "INSERT INTO users (email, password_hash, salt, customer_id, created_at)"
+            " VALUES (?,?,?,?,?)",
+            (email, _hash_password(body.password, salt), salt, customer_id, today),
+        )
+        conn.commit()
+        return AuthResponse(customer_id=customer_id, email=email, name=body.name)
+    finally:
+        conn.close()
+
+
+@app.get("/customers/{customer_id}/summary")
+def customer_summary(customer_id: int):
+    """Cheap check the dashboard uses to decide whether to show onboarding.
+    is_new = the customer has no transactions on record."""
+    conn = get_db()
+    try:
+        row = _require_customer(conn, customer_id)
+        n = conn.execute(
+            "SELECT COUNT(*) FROM transactions WHERE customer_id=?", (customer_id,)
+        ).fetchone()[0]
+        return {
+            "customer_id": customer_id,
+            "name": row["name"],
+            "transaction_count": n,
+            "is_new": n == 0,
+            "monthly_income": row["monthly_income"],
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+def login(body: LoginRequest):
+    email = _email_norm(body.email)
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT u.password_hash, u.salt, u.customer_id, c.name"
+            " FROM users u JOIN customers c ON c.id = u.customer_id"
+            " WHERE u.email = ?",
+            (email,),
+        ).fetchone()
+        if not row or not _verify_password(body.password, row["salt"], row["password_hash"]):
+            raise HTTPException(status_code=401, detail="invalid credentials")
+        return AuthResponse(
+            customer_id=row["customer_id"], email=email, name=row["name"]
+        )
     finally:
         conn.close()

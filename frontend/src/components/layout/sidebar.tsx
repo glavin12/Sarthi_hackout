@@ -9,7 +9,7 @@ import {
   MessageSquare,
   FileText,
   Settings,
-  HelpCircle,
+  Target,
   X,
   LucideIcon,
 } from 'lucide-react';
@@ -30,10 +30,10 @@ const MAIN_NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Chat', href: '/chat', icon: MessageSquare },
   { label: 'Loan Journey', href: '/loan-journey', icon: FileText },
+  { label: 'Goals', href: '/goals', icon: Target },
 ];
 
 const BOTTOM_NAV_ITEMS: NavItem[] = [
-  { label: 'Support', href: '/support', icon: HelpCircle },
   { label: 'Settings', href: '/settings', icon: Settings },
 ];
 

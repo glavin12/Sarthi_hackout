@@ -1,9 +1,10 @@
 'use client';
 
-import React, { createContext, useContext, useState } from 'react';
-import { usePathname } from 'next/navigation';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from './sidebar';
 import { TopBar, LanguageCode } from './top-bar';
+import { useAuth } from '@/lib/auth';
 
 export interface LanguageContextValue {
   language: LanguageCode;
@@ -37,6 +38,20 @@ export function PageShell({ children, initialLang = 'en' }: PageShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentLang, setCurrentLang] = useState<LanguageCode>(initialLang);
   const activePath = usePathname();
+  const router = useRouter();
+  const { user, ready } = useAuth();
+
+  useEffect(() => {
+    if (ready && !user) router.replace('/welcome');
+  }, [ready, user, router]);
+
+  if (!ready || !user) {
+    return (
+      <div className="min-h-screen bg-saarthi-bg flex items-center justify-center">
+        <div className="w-2 h-2 rounded-full bg-saarthi-healthy animate-pulse" />
+      </div>
+    );
+  }
 
   return (
     <LanguageContext.Provider value={{ language: currentLang, setLanguage: setCurrentLang }}>
