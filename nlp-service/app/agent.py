@@ -1,157 +1,138 @@
-"""Saarthi's LLM agent: Gemini tool-calling over the data-service helpers."""
-import functools
+"""Saarthi's LLM agent: Gemini via google-genai SDK.
 
-from app.clients import get_customer, get_transactions, get_decision, evaluate_intent
+Rewrite from the earlier langchain tool-calling implementation — the newer
+Gemini 3.x models require thought_signature handling in tool-call responses,
+which the pinned langchain-google-genai 2.x does not support. We inline the
+customer's data into the prompt instead of exposing it as agent tools; the
+model still gets everything it needs to give grounded advice, without the
+tool-call round-trip that hits the version wall.
+
+ponytail: inline context beats a tool-calling loop for a two-turn demo. If
+the demo ever needs live multi-tool reasoning, swap to langchain 1.x /
+langgraph's create_react_agent.
+"""
+from __future__ import annotations
+
+import functools
+import os
+
+from app.clients import get_customer, get_transactions, get_decision
 from app.journeys import get_state as journey_get_state, advance as journey_advance
 
 
-SAARTHI_SYSTEM_PROMPT = """You are Saarthi, an AI banking assistant for Indian customers. Your job:
-- Understand the customer's real financial situation from their data BEFORE giving advice.
-- Reply in the CUSTOMER'S LANGUAGE: if lang is "hi", reply in Hindi (Devanagari script); if "gu", reply in Gujarati script; if "en", reply in English. Never mix scripts within one reply.
+SAARTHI_SYSTEM_PROMPT = """You are Saarthi, an AI banking assistant for Indian customers.
+
+RULES:
+- Reply in the CUSTOMER'S LANGUAGE. If lang=hi reply in Hindi (Devanagari). If lang=gu reply in Gujarati script. If lang=en reply in English. NEVER mix scripts in one reply.
 - Use SIMPLE language. If you use terms like FOIR, KYC, CIBIL, EMI, briefly explain them the first time.
-- Be empathetic and warm. Especially when the customer is stressed.
+- Be empathetic and warm — especially when the customer is stressed.
+- Keep replies concise (2-4 short sentences). If you list steps, use short numbered lines.
+- If the question is unrelated to banking or personal finance, politely say you can't help with that and list what you CAN help with (loans, balance, KYC, savings goals, complaints).
 
-CRITICAL RULE — STRESS PIVOT:
-If the customer's intent is "loan_request", you MUST call `compute_financial_signals` first. If the returned `is_stressed` is true (missed EMIs, high EMI burden, or declining balance), DO NOT recommend a new loan. Instead, acknowledge the pressure with empathy, offer support (budgeting, restructuring existing dues, calling a human advisor), and explain WHY you are pausing the loan option. This is non-negotiable — customer wellbeing outranks conversion.
+STRESS PIVOT (non-negotiable):
+If the customer_state is `stressed` or `fraud_risk`, DO NOT recommend new loans or upsell. Acknowledge the pressure with empathy, offer support (budgeting, restructuring existing dues, calling a human advisor), and explain WHY you are pausing the loan option.
 
-IMPORTANT: When calling `compute_financial_signals`, the response now comes from the Decision Engine, not a local calculation. The `customer_state` field tells you the canonical state (healthy, vulnerable, stressed, fraud_risk). Trust this over any local assessment.
-
-Before proceeding with any loan-related intent, call `check_intent_allowed(customer_id, "loan_request")`. If `allowed` is false, do NOT offer the loan — pivot to support.
-
-Available context (passed in the input):
-- customer_id: <int>
-- detected_language: <"en"|"hi"|"gu">
-- classified_intent: <one of loan_request, balance_check, kyc_help, complaint, greeting, general>
-
-Journey handling:
-- If intent is one of loan_request / kyc_help / complaint, call `advance_journey(customer_id, intent)` to move the journey forward, then tailor your reply to that step's topic.
-- If intent is greeting/general/balance_check, do NOT advance a journey.
-
-Keep replies concise (2-4 short sentences). If listing steps, use short numbered lines.
+You will be given the customer's real context. Ground your reply in it — don't invent numbers.
 """
 
 
-# --- tool functions (plain Python; wrapped into langchain Tools lazily in _get_executor) ---
+def _build_context(customer_id: int, lang: str, intent: str, text: str) -> str:
+    """Assemble the customer's real state into a single string the LLM
+    reads. Everything the old tool-calling loop would have fetched is
+    pulled up-front here."""
+    parts: list[str] = [f"lang={lang}", f"classified_intent={intent}"]
 
-def fetch_customer(customer_id: int) -> dict:
-    """Fetch the customer's profile (name, language, KYC status, etc.) by customer_id."""
-    return get_customer(customer_id)
-
-
-def fetch_transactions(customer_id: int) -> list[dict]:
-    """Fetch the customer's recent transactions, most recent first. Returns up to the last 30."""
-    return get_transactions(customer_id)[:30]
-
-
-def compute_financial_signals(customer_id: int) -> dict:
-    """Get the customer's financial state from the Decision Engine (the single source of truth).
-    Returns state, signals, action, reason, and whether stress guardrails are active."""
     try:
-        result = get_decision(customer_id)
-        data = result.get("data", {})
-        return {
-            "customer_state": data.get("state", "unknown"),
-            "action": data.get("action", "do_nothing"),
-            "title": data.get("title", ""),
-            "message": data.get("message", ""),
-            "reason": data.get("plain_english_reason", ""),
-            "guardrail_applied": data.get("guardrail_applied", False),
-            "is_stressed": data.get("state") in ("stressed", "fraud_risk"),
-            "signals": data.get("signals", {}),
-        }
+        cust = get_customer(customer_id)
+        parts.append(f"customer_name={cust.get('name')}")
+        parts.append(f"monthly_income={cust.get('monthly_income')}")
     except Exception as e:
-        # Fallback: if Decision Engine is unreachable, use local computation
-        from app.signals import compute_signals
-        local = compute_signals(get_transactions(customer_id))
-        return local
+        parts.append(f"customer_fetch_error={e}")
 
-
-def check_intent_allowed(customer_id: int, proposed_action: str) -> dict:
-    """Check with the Decision Engine's guardrails if a proposed action (like loan_request) is allowed for this customer.
-    ALWAYS call this before proceeding with a loan or credit product request."""
     try:
-        return evaluate_intent(customer_id, proposed_action)
-    except Exception:
-        return {"allowed": True, "state": "unknown", "reason": "Could not verify. Proceed with caution."}
+        decision = get_decision(customer_id)
+        data = decision.get("data", {})
+        state = data.get("state", "unknown")
+        parts.append(f"customer_state={state}")
+        parts.append(f"is_stressed={state in ('stressed', 'fraud_risk')}")
+        signals = data.get("signals", {})
+        for k in ("monthly_income", "essential_spend", "monthly_emi",
+                 "savings_amount", "savings_rate", "foir", "balance_trend"):
+            if k in signals:
+                parts.append(f"{k}={signals[k]}")
+        if data.get("plain_english_reason"):
+            parts.append(f"why={data['plain_english_reason']}")
+    except Exception as e:
+        parts.append(f"decision_fetch_error={e}")
 
+    state = journey_get_state(customer_id)
+    if state:
+        parts.append(f"journey_step={state.get('step')}")
+        parts.append(f"journey_topic={state.get('topic')}")
 
-def get_journey_state(customer_id: int) -> dict | None:
-    """Get the customer's current multi-step journey state (loan/kyc/complaint), or None if no journey is active."""
-    return journey_get_state(customer_id)
-
-
-def advance_journey(customer_id: int, intent: str) -> dict | None:
-    """Advance the customer's journey for the given intent (loan_request, kyc_help, or complaint)
-    to its next step. Returns the new state (journey, step, topic, description), or None."""
-    return journey_advance(customer_id, intent)
+    parts.append(f"customer_message={text}")
+    return "\n".join(parts)
 
 
 @functools.lru_cache(maxsize=1)
-def _get_executor():
-    import os
-    from langchain_core.tools import StructuredTool
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    from langchain.agents import create_tool_calling_agent, AgentExecutor
-    from langchain_core.prompts import ChatPromptTemplate
-
+def _client():
+    from google import genai
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY must be set")
+    return genai.Client(api_key=api_key)
 
-    llm = ChatGoogleGenerativeAI(
-        model=os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite"),
-        google_api_key=api_key,
-        temperature=0.3,
+
+def _generate(prompt: str, model: str) -> str:
+    from google.genai import types
+    client = _client()
+    resp = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=SAARTHI_SYSTEM_PROMPT,
+            temperature=0.3,
+            max_output_tokens=512,
+        ),
     )
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", SAARTHI_SYSTEM_PROMPT),
-        ("human", "{input}"),
-        ("placeholder", "{agent_scratchpad}"),
-    ])
-    tools = [
-        StructuredTool.from_function(fetch_customer),
-        StructuredTool.from_function(fetch_transactions),
-        StructuredTool.from_function(compute_financial_signals),
-        StructuredTool.from_function(check_intent_allowed),
-        StructuredTool.from_function(get_journey_state),
-        StructuredTool.from_function(advance_journey),
-    ]
-    agent = create_tool_calling_agent(llm, tools, prompt)
-    return AgentExecutor(
-        agent=agent,
-        tools=tools,
-        return_intermediate_steps=True,
-        max_iterations=5,
-        verbose=False,
-    )
+    # `.text` collapses candidates → single string; empty string if the model
+    # refused / safety-blocked.
+    return (resp.text or "").strip()
 
 
 def run_agent(text: str, customer_id: int, lang: str, intent: str) -> dict:
-    executor = _get_executor()
-    input_str = (
-        f"customer_id={customer_id}\n"
-        f"detected_language={lang}\n"
-        f"classified_intent={intent}\n"
-        f"customer_message: {text}"
-    )
-    result = executor.invoke({"input": input_str})
-    reply = result.get("output", "")
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    context = _build_context(customer_id, lang, intent, text)
 
-    trace = []
-    for action, obs in result.get("intermediate_steps", []):
-        trace.append({
-            "tool": getattr(action, "tool", str(action)),
-            "input": getattr(action, "tool_input", None),
-            "observation": str(obs)[:500],
-        })
+    # Advance the journey for loan/kyc/complaint intents so the UI's stepper
+    # keeps moving. Greetings and general questions don't move a journey.
+    if intent in ("loan_request", "kyc_help", "complaint"):
+        journey_advance(customer_id, intent)
+
+    try:
+        reply = _generate(context, model_name)
+    except Exception as e:
+        # If the LLM is unavailable, return a polite fallback in the user's
+        # language. The frontend also has its own mock — this is the second
+        # line of defense.
+        reply = _fallback_reply(lang, e)
+
+    if not reply:
+        reply = _fallback_reply(lang, "empty response")
 
     state = journey_get_state(customer_id)
-    journey_step = state["step"] if state else None
-    requires = "human_callback" if state and state.get("topic") == "resolve" else None
-
     return {
         "reply_text": reply,
-        "journey_step": journey_step,
-        "requires": requires,
-        "trace": trace,
+        "journey_step": state["step"] if state else None,
+        "requires": "human_callback" if state and state.get("topic") == "resolve" else None,
+        "trace": [],
     }
+
+
+def _fallback_reply(lang: str, err) -> str:
+    # Keep this in sync with the frontend's `unknown_*` copy.
+    if lang == "hi":
+        return "माफ़ कीजिए, मैं अभी जवाब नहीं दे पा रहा। कृपया थोड़ी देर में फिर से पूछें।"
+    if lang == "gu":
+        return "માફ કરશો, હું અત્યારે જવાબ આપી શકતો નથી. કૃપા કરી થોડી વારમાં ફરી પૂછો."
+    return "Sorry, I couldn't process that right now. Please try again in a moment."

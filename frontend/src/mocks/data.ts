@@ -200,6 +200,80 @@ export const mockChatResponses: Record<string, ChatResponse> = {
     lang_detected: "en",
     reply_text: "Your current balance is ₹38,000. You have ₹6,500 in EMIs due this week. After all obligations, you'll have about ₹8,200 available.",
   },
+  balance_hi: {
+    intent: "balance_check",
+    lang_detected: "hi",
+    reply_text: "आपका मौजूदा बैलेंस ₹38,000 है। इस हफ्ते ₹6,500 की EMI बाकी है। सब खर्च के बाद लगभग ₹8,200 उपलब्ध रहेंगे।",
+  },
+  balance_gu: {
+    intent: "balance_check",
+    lang_detected: "gu",
+    reply_text: "તમારો હાલનો બેલેન્સ ₹38,000 છે. આ અઠવાડિયે ₹6,500 નું EMI બાકી છે. બધા ખર્ચ પછી લગભગ ₹8,200 ઉપલબ્ધ રહેશે.",
+  },
+
+  kyc_en: {
+    intent: "kyc_help",
+    lang_detected: "en",
+    reply_text: "Your KYC is complete and verified. If you'd like to update your address or phone, tap Settings → Profile, or say 'update KYC' and I'll walk you through it.",
+  },
+  kyc_hi: {
+    intent: "kyc_help",
+    lang_detected: "hi",
+    reply_text: "आपका KYC पूरा और सत्यापित है। पता या फ़ोन बदलना हो तो सेटिंग्स → प्रोफ़ाइल पर जाएँ, या 'KYC अपडेट' कहें, मैं आपकी मदद कर दूँगा।",
+  },
+  kyc_gu: {
+    intent: "kyc_help",
+    lang_detected: "gu",
+    reply_text: "તમારું KYC પૂરું અને ચકાસાયેલું છે. સરનામું અથવા ફોન બદલવો હોય તો સેટિંગ્સ → પ્રોફાઇલ પર જાઓ, અથવા 'KYC અપડેટ' કહો, હું મદદ કરીશ.",
+  },
+
+  complaint_en: {
+    intent: "complaint",
+    lang_detected: "en",
+    reply_text: "I'm sorry you're facing an issue. Please share the transaction date, amount, and what happened, and I'll open a ticket right away. For urgent card issues, tap 'Block card' in Settings.",
+  },
+  complaint_hi: {
+    intent: "complaint",
+    lang_detected: "hi",
+    reply_text: "आपको परेशानी हो रही है, इसके लिए खेद है। कृपया ट्रांज़ैक्शन की तारीख़, राशि और क्या हुआ बताइए — मैं तुरंत टिकट खोल दूँगा। कार्ड की तत्काल समस्या हो तो सेटिंग्स में 'कार्ड ब्लॉक' का उपयोग करें।",
+  },
+  complaint_gu: {
+    intent: "complaint",
+    lang_detected: "gu",
+    reply_text: "તકલીફ પડી તે માટે ખેદ છે. કૃપા કરીને ટ્રાન્ઝેક્શનની તારીખ, રકમ અને શું થયું તે જણાવો — હું તરત ટિકિટ ખોલી દઈશ. કાર્ડની તાત્કાલિક સમસ્યા હોય તો સેટિંગ્સમાં 'કાર્ડ બ્લોક' કરો.",
+  },
+
+  goal_en: {
+    intent: "greeting",
+    lang_detected: "en",
+    reply_text: "Great — savings goals live under 'Goals' in the sidebar. Tell me the goal (emergency fund, trip, down-payment) and a rough amount, and I'll set it up for you.",
+  },
+  goal_hi: {
+    intent: "greeting",
+    lang_detected: "hi",
+    reply_text: "बढ़िया — बचत के लक्ष्य साइडबार में 'Goals' में मिलते हैं। लक्ष्य बताइए (इमरजेंसी फ़ंड, यात्रा, डाउन-पेमेंट) और लगभग राशि, मैं सेट कर दूँगा।",
+  },
+  goal_gu: {
+    intent: "greeting",
+    lang_detected: "gu",
+    reply_text: "સરસ — બચતના લક્ષ્યો સાઇડબારમાં 'Goals' હેઠળ છે. લક્ષ્ય જણાવો (ઈમરજન્સી ફંડ, પ્રવાસ, ડાઉન-પેમેન્ટ) અને અંદાજિત રકમ, હું સેટ કરી દઈશ.",
+  },
+
+  unknown_en: {
+    intent: "greeting",
+    lang_detected: "en",
+    reply_text: "I'm not sure I understood that. I can help with loans, balance, KYC, savings goals, and complaints. Could you rephrase, or tell me which of these you'd like help with?",
+  },
+  unknown_hi: {
+    intent: "greeting",
+    lang_detected: "hi",
+    reply_text: "माफ़ कीजिए, मैं समझ नहीं पाया। मैं लोन, बैलेंस, KYC, बचत के लक्ष्य और शिकायत में मदद कर सकता हूँ। कृपया अलग तरीक़े से पूछिए, या बताइए किसमें मदद चाहिए।",
+  },
+  unknown_gu: {
+    intent: "greeting",
+    lang_detected: "gu",
+    reply_text: "માફ કરશો, હું સમજી શક્યો નહીં. હું લોન, બેલેન્સ, KYC, બચતના લક્ષ્યો અને ફરિયાદમાં મદદ કરી શકું છું. કૃપા કરી બીજી રીતે પૂછો, અથવા જણાવો કઈ બાબતમાં મદદ જોઈએ.",
+  },
 };
 
 /* ── State resolver for demo events ── */

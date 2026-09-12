@@ -104,3 +104,38 @@ def test_api_v1_suspicious_debit_latenight_and_large(client):
     txns = client.get("/api/v1/customers/1/transactions").json()
     susp = [t for t in txns if t["timestamp"].endswith("T02:47:00")]
     assert susp and susp[0]["amount"] >= 50000 and susp[0]["type"] == "DEBIT"
+
+
+# --- auth ---
+
+def test_seeded_login_and_bad_password(client):
+    ok = client.post("/auth/login",
+                     json={"email": "ramesh@saarthi.in", "password": "ramesh@123"})
+    assert ok.status_code == 200
+    body = ok.json()
+    assert body["customer_id"] == 1 and body["email"] == "ramesh@saarthi.in"
+
+    bad = client.post("/auth/login",
+                      json={"email": "ramesh@saarthi.in", "password": "wrong"})
+    assert bad.status_code == 401
+
+
+def test_register_creates_customer_and_login_works(client):
+    r = client.post("/auth/register", json={
+        "email": "New@Example.com", "password": "hunter2",
+        "name": "Test User", "monthly_income": 55000,
+    })
+    assert r.status_code == 200
+    cid = r.json()["customer_id"]
+    assert cid > 4  # after the four seeded personas
+
+    # Duplicate email is rejected (case-insensitive).
+    dup = client.post("/auth/register", json={
+        "email": "new@example.com", "password": "hunter2", "name": "Dup",
+    })
+    assert dup.status_code == 409
+
+    # Fresh login works with normalised email.
+    lg = client.post("/auth/login",
+                     json={"email": "new@example.com", "password": "hunter2"})
+    assert lg.status_code == 200 and lg.json()["customer_id"] == cid

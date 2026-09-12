@@ -2,16 +2,17 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { getSession } from '@/lib/auth';
 
 /**
  * Landing/redirect page for Saarthi.
- * Automatically redirects the user to the main /dashboard route.
+ * Routes to /dashboard if a session exists, else to /welcome.
  */
 function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace('/dashboard');
+    router.replace(getSession() ? '/dashboard' : '/welcome');
   }, [router]);
 
   return (

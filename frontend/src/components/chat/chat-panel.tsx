@@ -8,7 +8,14 @@ import { cn } from '@/lib/utils';
 import { MessageBubble } from '@/components/chat/message-bubble';
 import { LanguageSwitcher, LanguageCode } from '@/components/chat/language-switcher';
 import { MicButton } from '@/components/chat/mic-button';
-import { sendChatMessage } from '@/lib/api';
+import { sendChatMessage, currentCustomerId } from '@/lib/api';
+import { useSpeechRecognition } from '@/lib/speech';
+
+const LANG_BCP47: Record<LanguageCode, string> = {
+  en: 'en-IN',
+  hi: 'hi-IN',
+  gu: 'gu-IN',
+};
 
 export interface ChatPanelProps {
   className?: string;
@@ -34,7 +41,6 @@ export function ChatPanel({
   const [currentLang, setCurrentLang] = useState<LanguageCode>(initialLang);
   const [inputText, setInputText] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
-  const [isListening, setIsListening] = useState<boolean>(false);
   const [isLive, setIsLive] = useState(false);
 
   // Initialize with greeting in current language
@@ -54,6 +60,16 @@ export function ChatPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const speech = useSpeechRecognition({
+    lang: LANG_BCP47[currentLang],
+    onFinal: (text) => {
+      // Push the final transcript into the input so the user can review or
+      // send. Auto-send would be surprising after a mis-hear.
+      setInputText((prev) => (prev ? `${prev} ${text}` : text));
+      inputRef.current?.focus();
+    },
+  });
+
   // Scroll to bottom whenever messages list changes or typing indicator is toggled
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -64,43 +80,68 @@ export function ChatPanel({
   }, [messages, isTyping, scrollToBottom]);
 
   /**
-   * Handle user language switch: update state and append greeting in the newly selected language.
+   * Handle user language switch: RESET the chat (a language change means a
+   * new conversation, not a mixed-script transcript) and open with a greeting
+   * in the newly selected language.
    */
   const handleLangChange = (newLang: LanguageCode) => {
     if (newLang === currentLang) return;
     setCurrentLang(newLang);
-
+    speech.stop();
     const greetingKey = `greeting_${newLang}`;
     const greetingData = mockChatResponses[greetingKey] || mockChatResponses.greeting_en;
-
-    const newGreetingMsg: ChatMessage = {
-      id: `lang-change-${newLang}-${Date.now()}`,
-      role: 'saarthi',
-      text: greetingData.reply_text,
-      lang: newLang,
-      timestamp: getCurrentTimeString(),
-    };
-
-    setMessages((prev) => [...prev, newGreetingMsg]);
+    setMessages([
+      {
+        id: `init-${newLang}-${Date.now()}`,
+        role: 'saarthi',
+        text: greetingData.reply_text,
+        lang: newLang,
+        timestamp: getCurrentTimeString(),
+      },
+    ]);
   };
 
   /**
-   * Match user text to response intent based on keywords and current language.
+   * Detect the script of the user's message so we can reply in the same
+   * language even if the UI is set to English but the user types/speaks
+   * Hindi or Gujarati.
    */
-  const resolveBotResponse = (text: string, lang: LanguageCode): ChatResponse => {
+  const detectLangFromText = (text: string, fallback: LanguageCode): LanguageCode => {
+    for (const ch of text) {
+      const c = ch.charCodeAt(0);
+      if (c >= 0x0900 && c <= 0x097F) return 'hi';
+      if (c >= 0x0A80 && c <= 0x0AFF) return 'gu';
+    }
+    return fallback;
+  };
+
+  /**
+   * Rule-based intent + polite unknown fallback in the SAME language the
+   * user wrote in. Used when the NLP backend is unreachable.
+   */
+  const resolveBotResponse = (text: string, uiLang: LanguageCode): ChatResponse => {
+    const lang = detectLangFromText(text, uiLang);
     const lower = text.toLowerCase();
+    const pick = (key: string) => mockChatResponses[key] || mockChatResponses[`unknown_${lang}`] || mockChatResponses.unknown_en;
 
-    if (lower.includes('loan') || lower.includes('emi') || lower.includes('ऋण') || lower.includes('લોન')) {
-      const key = `loan_${lang}`;
-      return mockChatResponses[key] || mockChatResponses.loan_en;
-    }
+    const loanTerms = ['loan', 'emi', 'लोन', 'ऋण', 'क़र्ज़', 'कर्ज', 'લોન', 'ઇએમઆઈ'];
+    const balanceTerms = ['balance', 'account', 'बैलेंस', 'खाता', 'खाते', 'शेष', 'બેલેન્સ', 'ખાતું', 'ખાતા', 'શેષ'];
+    const kycTerms = ['kyc', 'आधार', 'पैन', 'आइडी', 'आईडी', 'આધાર', 'પાન', 'આઈડી', 'ઓળખ'];
+    const complaintTerms = ['complaint', 'fraud', 'issue', 'problem', 'शिकायत', 'फ्रॉड', 'धोखा', 'ફરિયાદ', 'ફ્રોડ', 'છેતરપિંડી'];
+    const goalTerms = ['goal', 'save', 'saving', 'बचत', 'लक्ष्य', 'बचाना', 'બચત', 'લક્ષ્ય', 'બચાવવું'];
+    const greetTerms = ['hi', 'hello', 'hey', 'namaste', 'नमस्ते', 'नमस्कार', 'हैलो', 'નમસ્તે', 'હેલો', 'કેમ છો'];
 
-    if (lower.includes('balance') || lower.includes('खाता') || lower.includes('બેલેન્સ') || lower.includes('શેષ')) {
-      return mockChatResponses.balance_en;
-    }
+    const hit = (terms: string[]) => terms.some((t) => lower.includes(t.toLowerCase()));
 
-    const greetingKey = `greeting_${lang}`;
-    return mockChatResponses[greetingKey] || mockChatResponses.greeting_en;
+    if (hit(loanTerms))       return pick(`loan_${lang}`);
+    if (hit(balanceTerms))    return pick(`balance_${lang}`);
+    if (hit(kycTerms))        return pick(`kyc_${lang}`);
+    if (hit(complaintTerms))  return pick(`complaint_${lang}`);
+    if (hit(goalTerms))       return pick(`goal_${lang}`);
+    if (hit(greetTerms))      return pick(`greeting_${lang}`);
+
+    // Nothing matched — polite "don't know" in the detected language.
+    return mockChatResponses[`unknown_${lang}`] || mockChatResponses.unknown_en;
   };
 
   /**
@@ -124,7 +165,7 @@ export function ChatPanel({
 
     try {
       // Try real NLP service
-      const apiResponse = await sendChatMessage(1, query, currentLang);
+      const apiResponse = await sendChatMessage(Number(currentCustomerId()), query, currentLang);
       setIsLive(true);
       
       const saarthiMessage: ChatMessage = {
@@ -174,26 +215,13 @@ export function ChatPanel({
   };
 
   /**
-   * Handle microphone toggle for simulated voice input.
+   * Toggle real speech recognition. Uses the current UI language to pick
+   * hi-IN / gu-IN / en-IN. If the browser doesn't support it, MicButton is
+   * hidden entirely (see render).
    */
-  const handleMicToggle = (listening: boolean) => {
-    setIsListening(listening);
-    if (listening) {
-      // Simulate voice capture prompt after brief listening
-      const timer = setTimeout(() => {
-        setIsListening(false);
-        const sampleVoiceQuery =
-          currentLang === 'hi'
-            ? 'मुझे होम लोन की जानकारी चाहिए'
-            : currentLang === 'gu'
-            ? 'મને હોમ લોનની માહિતી જોઈએ છે'
-            : 'I would like to know about home loan options';
-        setInputText(sampleVoiceQuery);
-        inputRef.current?.focus();
-      }, 2500);
-
-      return () => clearTimeout(timer);
-    }
+  const handleMicToggle = (shouldListen: boolean) => {
+    if (shouldListen) speech.start();
+    else speech.stop();
   };
 
   return (
@@ -253,19 +281,29 @@ export function ChatPanel({
 
       {/* Input Area */}
       <div className="border-t border-saarthi-border-subtle bg-saarthi-bg p-3 shrink-0">
-        {isListening && (
+        {speech.listening && (
           <div className="mb-2 px-3 py-1.5 rounded-md bg-saarthi-card border border-saarthi-healthy/30 flex items-center justify-between text-xs text-saarthi-healthy font-light animate-fade-in">
-            <span className="inline-flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-saarthi-healthy animate-ping" />
-              Listening... Speak now
+            <span className="inline-flex items-center gap-2 min-w-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-saarthi-healthy animate-ping shrink-0" />
+              <span className="truncate">
+                {speech.interim
+                  ? speech.interim
+                  : `Listening in ${currentLang === 'hi' ? 'Hindi' : currentLang === 'gu' ? 'Gujarati' : 'English'}...`}
+              </span>
             </span>
             <button
               type="button"
-              onClick={() => setIsListening(false)}
-              className="text-[10px] text-saarthi-text-muted hover:text-saarthi-text-primary underline"
+              onClick={() => speech.stop()}
+              className="text-[10px] text-saarthi-text-muted hover:text-saarthi-text-primary underline shrink-0 ml-2"
             >
               Cancel
             </button>
+          </div>
+        )}
+
+        {speech.error && !speech.listening && (
+          <div className="mb-2 px-3 py-1.5 rounded-md bg-saarthi-stressed/10 border border-saarthi-stressed/30 text-xs text-saarthi-stressed font-light animate-fade-in">
+            {speech.error}
           </div>
         )}
 
@@ -276,14 +314,16 @@ export function ChatPanel({
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type or speak..."
+            placeholder={speech.supported ? "Type or tap the mic to speak..." : "Type your message..."}
             className="flex-1 bg-saarthi-card border border-saarthi-border-subtle rounded-md px-3 py-2 text-sm font-light text-saarthi-text-primary placeholder:text-saarthi-text-muted focus:outline-none focus:border-saarthi-border-active transition-colors"
           />
 
-          <MicButton
-            isListening={isListening}
-            onToggle={handleMicToggle}
-          />
+          {speech.supported && (
+            <MicButton
+              isListening={speech.listening}
+              onToggle={handleMicToggle}
+            />
+          )}
 
           <button
             type="button"

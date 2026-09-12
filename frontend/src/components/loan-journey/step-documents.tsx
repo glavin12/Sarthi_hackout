@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { FileCheck, Upload, Check, FileText, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { StepCard } from './step-card';
 import { cn } from '@/lib/utils';
@@ -11,6 +11,7 @@ export interface DocumentItem {
   subtitle: string;
   uploaded: boolean;
   fileFormatHint: string;
+  fileName?: string;
 }
 
 export interface StepDocumentsProps {
@@ -56,33 +57,34 @@ export function StepDocuments({
     initialDocuments ?? DEFAULT_DOCUMENTS
   );
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const fileInputsRef = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const toggleDocumentUpload = (id: string) => {
-    // If already uploaded, toggle off or simulate re-upload
-    const currentDoc = docs.find((d) => d.id === id);
-    if (!currentDoc) return;
-
-    if (currentDoc.uploaded) {
-      const updated = docs.map((d) =>
-        d.id === id ? { ...d, uploaded: false } : d
-      );
-      setDocs(updated);
-      onChange?.(updated);
+  const handleUploadClick = (id: string) => {
+    const doc = docs.find((d) => d.id === id);
+    if (!doc) return;
+    if (doc.uploaded) {
+      // "Replace" or clear — reopen the picker.
+      fileInputsRef.current[id]?.click();
       return;
     }
+    fileInputsRef.current[id]?.click();
+  };
 
-    // Simulate quick upload with loading
+  const handleFileChosen = (id: string, file: File | null | undefined) => {
+    if (!file) return;
     setUploadingId(id);
+    // No real upload — this is a demo. We keep name/size in state so the
+    // user sees their real filename instead of a canned string.
     setTimeout(() => {
       setDocs((prev) => {
         const next = prev.map((d) =>
-          d.id === id ? { ...d, uploaded: true } : d
+          d.id === id ? { ...d, uploaded: true, fileName: file.name } : d
         );
         onChange?.(next);
         return next;
       });
       setUploadingId(null);
-    }, 600);
+    }, 400);
   };
 
   const allUploaded = docs.every((d) => d.uploaded);
@@ -154,17 +156,24 @@ export function StepDocuments({
                       )}
                     </div>
                     <p className="text-xs font-light text-saarthi-text-muted truncate">
-                      {doc.subtitle}
+                      {doc.fileName || doc.subtitle}
                     </p>
                   </div>
                 </div>
 
-                {/* Right side: Simulated Upload Button */}
+                {/* Right side: Real file input, hidden — button opens the OS picker */}
                 <div className="shrink-0">
+                  <input
+                    ref={(el) => { fileInputsRef.current[doc.id] = el; }}
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    className="hidden"
+                    onChange={(e) => handleFileChosen(doc.id, e.target.files?.[0])}
+                  />
                   <button
                     type="button"
                     disabled={isUploading}
-                    onClick={() => toggleDocumentUpload(doc.id)}
+                    onClick={() => handleUploadClick(doc.id)}
                     className={cn(
                       'btn-outline text-xs px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 font-normal',
                       doc.uploaded

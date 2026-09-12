@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { CheckCircle2, ShieldCheck, ArrowRight, Check, Sparkles, FileText, Landmark } from 'lucide-react';
 import { StepCard } from './step-card';
 import { cn } from '@/lib/utils';
+import { addAppliedLoan, parseRupee } from '@/lib/loans';
+import { currentCustomerId } from '@/lib/api';
 
 export interface LoanApplicationSummary {
   loanType?: string;
@@ -58,6 +60,20 @@ export function StepApply({
 
     // Simulate instant decisioning and disbursement pipeline
     setTimeout(() => {
+      // Persist the applied loan so the dashboard reflects the new EMI.
+      const tenureMatch = /(\d+)\s*Years/i.exec(appliedSummary.tenure || '');
+      const tenureMonths = tenureMatch ? Number(tenureMatch[1]) * 12 : 60;
+      addAppliedLoan({
+        id: `loan-${Date.now()}`,
+        customerId: currentCustomerId(),
+        loanType: appliedSummary.loanType || 'Loan',
+        amount: parseRupee(appliedSummary.amount),
+        monthlyEmi: parseRupee(appliedSummary.monthlyEmi),
+        tenureMonths,
+        interestRate: appliedSummary.interestRate || '',
+        appliedAt: new Date().toISOString(),
+        referenceId: `SAR-LN-${new Date().getFullYear()}-${Math.floor(Math.random() * 9000 + 1000)}`,
+      });
       setIsSubmitting(false);
       setIsSubmitted(true);
       onSubmitSuccess?.();

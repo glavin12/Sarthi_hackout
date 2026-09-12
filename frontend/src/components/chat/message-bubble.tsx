@@ -94,11 +94,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           {message.text}
         </p>
 
-        {message.journey_step && (
-          <JourneyStepCard step={message.journey_step} />
-        )}
-
-        {formattedTime && (
+{formattedTime && (
           <div
             className={cn(
               'text-[10px] text-saarthi-text-muted mt-1 select-none',
