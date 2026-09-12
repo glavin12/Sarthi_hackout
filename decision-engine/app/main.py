@@ -18,9 +18,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.responses import RedirectResponse
+
 # Mount Routes
 app.include_router(router, prefix=settings.API_V1_STR)
 app.include_router(router)  # Also mount at root for easy access: POST /decide
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """Redirect root path directly to interactive API documentation."""
+    return RedirectResponse(url="/docs")
 
 if __name__ == "__main__":
     import uvicorn
