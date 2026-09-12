@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { AlertCircle } from "lucide-react";
 import {
@@ -16,6 +16,7 @@ import {
   healthyBalanceHistory,
   resolveStateAfterEvent,
 } from "@/mocks/data";
+import { getDecision, getBalanceHistory, injectEvent } from "@/lib/api";
 import { PageShell } from "@/components/layout/page-shell";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { HealthGauge } from "@/components/dashboard/health-gauge";
@@ -39,14 +40,35 @@ export default function DashboardPage() {
   const [balanceHistory, setBalanceHistory] = useState<BalancePoint[]>(
     healthyBalanceHistory
   );
+  const [customerName, setCustomerName] = useState<string>(mockCustomer.name);
   const [activeDemoEvent, setActiveDemoEvent] = useState<DemoEvent | null>(null);
 
-  const handleInjectEvent = (event: DemoEvent) => {
+  // Load live state from the decision-engine on mount. Falls back to mock data
+  // (kept above) if the backends aren't reachable, so the demo never blanks out.
+  const refresh = async () => {
+    const decision = await getDecision();
+    setCustomerName(decision.customerName);
+    setCustomerState(decision.state);
+    setNba(decision.nba);
+    setBalanceHistory(await getBalanceHistory());
+  };
+
+  useEffect(() => {
+    refresh().catch((e) => console.warn("Backend unavailable, using mock data:", e));
+  }, []);
+
+  const handleInjectEvent = async (event: DemoEvent) => {
     setActiveDemoEvent(event);
-    const resolved = resolveStateAfterEvent(customerState, event);
-    setCustomerState(resolved.state);
-    setNba(resolved.nba);
-    setBalanceHistory(resolved.balance);
+    try {
+      await injectEvent(event);
+      await refresh();
+    } catch (e) {
+      console.warn("Inject via backend failed, using mock resolver:", e);
+      const resolved = resolveStateAfterEvent(customerState, event);
+      setCustomerState(resolved.state);
+      setNba(resolved.nba);
+      setBalanceHistory(resolved.balance);
+    }
   };
 
   const isFraudRisk = customerState.state === "fraud_risk";
@@ -64,7 +86,7 @@ export default function DashboardPage() {
         >
           <div>
             <h1 className="text-xl font-light text-saarthi-text-primary tracking-tight">
-              Namaste, {mockCustomer.name} 👋
+              Namaste, {customerName} 👋
             </h1>
             <p className="text-xs font-light text-saarthi-text-secondary mt-0.5">
               Financial vitals and automated guardrails
@@ -188,6 +210,4 @@ export default function DashboardPage() {
     </PageShell>
   );
 }
-
-export { DashboardPage };
 

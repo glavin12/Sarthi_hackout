@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { SendHorizontal } from 'lucide-react';
 import { ChatMessage, ChatResponse } from '@/types';
 import { mockChatResponses } from '@/mocks/data';
+import { sendChat } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { MessageBubble } from '@/components/chat/message-bubble';
 import { LanguageSwitcher, LanguageCode } from '@/components/chat/language-switcher';
@@ -120,9 +121,8 @@ export function ChatPanel({
     setInputText('');
     setIsTyping(true);
 
-    // Simulate 1.2s Saarthi intelligence delay
-    setTimeout(() => {
-      const responseData = resolveBotResponse(query, currentLang);
+    // Call nlp-service; fall back to the mock resolver if it's unreachable.
+    const appendReply = (responseData: ChatResponse) => {
       const saarthiMessage: ChatMessage = {
         id: `saarthi-${Date.now()}`,
         role: 'saarthi',
@@ -131,10 +131,16 @@ export function ChatPanel({
         timestamp: getCurrentTimeString(),
         journey_step: responseData.journey_step,
       };
-
       setMessages((prev) => [...prev, saarthiMessage]);
       setIsTyping(false);
-    }, 1200);
+    };
+
+    sendChat(query, currentLang)
+      .then(appendReply)
+      .catch((e) => {
+        console.warn('NLP service unavailable, using mock response:', e);
+        appendReply(resolveBotResponse(query, currentLang));
+      });
   };
 
   /**
