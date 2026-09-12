@@ -13,9 +13,10 @@ from datetime import date
 from enum import Enum
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .seed import build_dataset
+from .seed import START_BALANCE, build_dataset
 
 DB_PATH = os.environ.get("DATA_DB_PATH", "data.db")
 
@@ -85,6 +86,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SAARTHI data-service", version="1.0.0", lifespan=lifespan)
 
+# Browser (frontend) and sibling services call this directly.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # --- response / request models ---
 class Customer(BaseModel):
@@ -125,6 +135,11 @@ def _require_customer(conn: sqlite3.Connection, customer_id: int) -> sqlite3.Row
 
 
 # --- endpoints ---
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "data-service"}
+
+
 @app.get("/customers", response_model=list[Customer])
 def list_customers():
     conn = get_db()
@@ -177,7 +192,10 @@ def inject_event(customer_id: int, body: InjectRequest):
             rows_to_add.append((income // 2, "salary",
                                 "Salary credit (revised - reduced)", 0))
         elif body.event is Event.suspicious_debit:
-            rows_to_add.append((-int(income * 0.8) - 15000, "suspicious_debit",
+            # >= 50k so the /api/v1 late-night (02:47) fraud heuristic fires for
+            # every persona regardless of income.
+            amt = max(60000, int(income * 1.5))
+            rows_to_add.append((-amt, "suspicious_debit",
                                 "Unusual debit (02:47) - unrecognised merchant", 1))
         elif body.event is Event.salary_hike:
             rows_to_add.append((int(income * 1.3), "salary",
@@ -197,5 +215,101 @@ def inject_event(customer_id: int, body: InjectRequest):
             f"SELECT * FROM transactions WHERE id IN ({placeholders})", ids
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ===================================================================
+# /api/v1 canonical layer — the shape decision-engine consumes.
+# Pure mapping over the same stored rows; no separate storage.
+# credit/debit direction from the sign; category upper-cased; a fixed
+# daytime hour keeps normal txns off the fraud late-night heuristic,
+# while a suspicious_debit gets a 02:47 timestamp.
+# ===================================================================
+_CATEGORY_MAP = {
+    "salary": "SALARY", "income": "SALARY", "rent": "RENT", "emi": "EMI",
+    "emi_missed": "EMI", "groceries": "GROCERIES", "utilities": "UTILITIES",
+    "upi": "TRANSFER", "suspicious_debit": "TRANSFER",
+}
+_RECURRING = {"salary", "rent", "emi"}
+
+
+class CanonicalTransaction(BaseModel):
+    txn_id: str
+    customer_id: str
+    timestamp: str
+    amount: float          # >= 0; direction carried by `type`
+    type: str              # CREDIT | DEBIT
+    category: str          # UPPERCASE
+    merchant: str | None = None
+    balance_after_txn: float
+    is_recurring: bool = False
+    status: str            # SUCCESS | BOUNCED
+
+
+class CanonicalCustomer(BaseModel):
+    customer_id: str
+    name: str
+    consent_given: bool
+    stated_monthly_income: float
+    account_created_at: str | None = None
+
+
+def _to_canonical_customer(row: sqlite3.Row) -> dict:
+    return {
+        "customer_id": str(row["id"]),
+        "name": row["name"],
+        "consent_given": True,
+        "stated_monthly_income": float(row["monthly_income"]),
+        "account_created_at": row["created_at"],
+    }
+
+
+def _to_canonical_txns(customer: sqlite3.Row, rows: list[sqlite3.Row]) -> list[dict]:
+    """Map stored rows to the canonical schema, computing a running balance in
+    chronological order. `rows` may be in any order; output is newest-first."""
+    chrono = sorted(rows, key=lambda r: (r["date"], r["id"]))
+    balance = float(START_BALANCE.get(customer["persona_type"], 50000))
+    out: list[dict] = []
+    for r in chrono:
+        balance += r["amount"]  # signed: credit adds, debit subtracts
+        stored_type = r["type"]
+        hour = "02:47:00" if stored_type == "suspicious_debit" else "10:00:00"
+        out.append({
+            "txn_id": str(r["id"]),
+            "customer_id": str(customer["id"]),
+            "timestamp": f"{r['date']}T{hour}",
+            "amount": float(abs(r["amount"])),
+            "type": "CREDIT" if r["amount"] > 0 else "DEBIT",
+            "category": _CATEGORY_MAP.get(stored_type, "OTHER"),
+            "merchant": r["description"],
+            "balance_after_txn": balance,
+            "is_recurring": stored_type in _RECURRING,
+            "status": "BOUNCED" if stored_type == "emi_missed" else "SUCCESS",
+        })
+    out.reverse()  # newest-first
+    return out
+
+
+@app.get("/api/v1/customers/{customer_id}", response_model=CanonicalCustomer,
+         tags=["canonical"])
+def get_customer_canonical(customer_id: int):
+    conn = get_db()
+    try:
+        return _to_canonical_customer(_require_customer(conn, customer_id))
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/customers/{customer_id}/transactions",
+         response_model=list[CanonicalTransaction], tags=["canonical"])
+def get_transactions_canonical(customer_id: int):
+    conn = get_db()
+    try:
+        customer = _require_customer(conn, customer_id)
+        rows = conn.execute(
+            "SELECT * FROM transactions WHERE customer_id = ?", (customer_id,)
+        ).fetchall()
+        return _to_canonical_txns(customer, rows)
     finally:
         conn.close()

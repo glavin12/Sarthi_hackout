@@ -71,3 +71,36 @@ def test_bad_event_422(client):
 def test_inject_missing_customer_404(client):
     assert client.post("/customers/999/inject-event",
                        json={"event": "missed_emi"}).status_code == 404
+
+
+# --- /api/v1 canonical layer (the contract decision-engine consumes) ---
+
+def test_api_v1_customer_shape(client):
+    c = client.get("/api/v1/customers/1").json()
+    assert c["customer_id"] == "1"
+    assert c["consent_given"] is True
+    assert c["stated_monthly_income"] > 0
+
+
+def test_api_v1_transactions_canonical(client):
+    txns = client.get("/api/v1/customers/1/transactions").json()
+    assert txns
+    t = txns[0]
+    assert t["type"] in ("CREDIT", "DEBIT")
+    assert t["amount"] >= 0                       # positive; direction in `type`
+    assert t["category"] == t["category"].upper()
+    assert "balance_after_txn" in t
+
+
+def test_api_v1_missed_emi_is_bounced_emi(client):
+    client.post("/customers/1/inject-event", json={"event": "missed_emi"})
+    txns = client.get("/api/v1/customers/1/transactions").json()
+    bounced = [t for t in txns if t["status"] == "BOUNCED"]
+    assert bounced and bounced[0]["category"] == "EMI"
+
+
+def test_api_v1_suspicious_debit_latenight_and_large(client):
+    client.post("/customers/1/inject-event", json={"event": "suspicious_debit"})
+    txns = client.get("/api/v1/customers/1/transactions").json()
+    susp = [t for t in txns if t["timestamp"].endswith("T02:47:00")]
+    assert susp and susp[0]["amount"] >= 50000 and susp[0]["type"] == "DEBIT"

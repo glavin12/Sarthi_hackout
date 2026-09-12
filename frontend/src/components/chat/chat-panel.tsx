@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { MessageBubble } from '@/components/chat/message-bubble';
 import { LanguageSwitcher, LanguageCode } from '@/components/chat/language-switcher';
 import { MicButton } from '@/components/chat/mic-button';
+import { sendChatMessage } from '@/lib/api';
 
 export interface ChatPanelProps {
   className?: string;
@@ -34,6 +35,7 @@ export function ChatPanel({
   const [inputText, setInputText] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [isListening, setIsListening] = useState<boolean>(false);
+  const [isLive, setIsLive] = useState(false);
 
   // Initialize with greeting in current language
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -104,7 +106,7 @@ export function ChatPanel({
   /**
    * Send a user message and trigger automated assistant response with typing delay.
    */
-  const handleSendMessage = (textToSend?: string) => {
+  const handleSendMessage = async (textToSend?: string) => {
     const query = (textToSend ?? inputText).trim();
     if (!query || isTyping) return;
 
@@ -120,8 +122,32 @@ export function ChatPanel({
     setInputText('');
     setIsTyping(true);
 
-    // Simulate 1.2s Saarthi intelligence delay
-    setTimeout(() => {
+    try {
+      // Try real NLP service
+      const apiResponse = await sendChatMessage(1, query, currentLang);
+      setIsLive(true);
+      
+      const saarthiMessage: ChatMessage = {
+        id: `saarthi-${Date.now()}`,
+        role: 'saarthi',
+        text: apiResponse.reply_text,
+        lang: apiResponse.lang_detected || currentLang,
+        timestamp: getCurrentTimeString(),
+        journey_step: apiResponse.journey_step != null ? {
+          step: apiResponse.journey_step,
+          total: 6,
+          label: apiResponse.requires || 'In progress',
+          status: 'active' as const,
+        } : undefined,
+      };
+
+      setMessages((prev) => [...prev, saarthiMessage]);
+    } catch (err) {
+      console.warn('NLP service unreachable, using mock:', err);
+      setIsLive(false);
+      
+      // Fallback to mock
+      await new Promise(resolve => setTimeout(resolve, 800));
       const responseData = resolveBotResponse(query, currentLang);
       const saarthiMessage: ChatMessage = {
         id: `saarthi-${Date.now()}`,
@@ -131,10 +157,10 @@ export function ChatPanel({
         timestamp: getCurrentTimeString(),
         journey_step: responseData.journey_step,
       };
-
       setMessages((prev) => [...prev, saarthiMessage]);
+    } finally {
       setIsTyping(false);
-    }, 1200);
+    }
   };
 
   /**

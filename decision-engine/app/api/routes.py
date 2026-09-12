@@ -1,17 +1,18 @@
 import httpx
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 from app.core.config import settings
+from app.core.demo_personas import (
+    get_fraud_priya,
+    get_healthy_ramesh,
+    get_stressed_ramesh,
+)
 from app.engine.pipeline import run_decision_engine
 from app.schemas.models import (
     CustomerProfile,
     DecideRequest,
     DecideResponse,
     Transaction,
-)
-from tests.fixtures.personas import (
-    get_fraud_priya,
-    get_healthy_ramesh,
-    get_stressed_ramesh,
 )
 
 router = APIRouter()
@@ -77,7 +78,7 @@ async def decide_next_best_action(request: DecideRequest):
     if (not customer or not transactions) and request.customer_id in DEMO_PERSONAS:
         customer, transactions = DEMO_PERSONAS[request.customer_id]()
 
-    # Case 2: Fetch from Data Service via HTTP
+    # Case 2: Fetch from Data Service canonical API (returns DE-compatible format)
     if not customer or transactions is None:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -110,3 +111,41 @@ async def decide_next_best_action(request: DecideRequest):
     nba = run_decision_engine(customer, transactions)
 
     return DecideResponse(success=True, data=nba)
+
+
+class EvaluateIntentRequest(BaseModel):
+    customer_id: str
+    proposed_action: str  # e.g. "loan_request", "balance_check"
+
+
+class EvaluateIntentResponse(BaseModel):
+    allowed: bool
+    state: str
+    reason: str
+    support_options: list[str] | None = None
+
+
+@router.post("/evaluate-intent", response_model=EvaluateIntentResponse, tags=["Decision Engine"])
+async def evaluate_intent(request: EvaluateIntentRequest):
+    """Lightweight guardrail check for chatbot: can this customer do this action?"""
+    # Reuse the /decide logic to get customer state
+    decide_req = DecideRequest(customer_id=request.customer_id)
+    result = await decide_next_best_action(decide_req)
+    nba = result.data
+
+    loan_actions = {"loan_request", "apply_loan", "personal_loan", "home_loan"}
+    is_loan = request.proposed_action in loan_actions
+
+    if nba.state in ("stressed", "fraud_risk") and is_loan:
+        return EvaluateIntentResponse(
+            allowed=False,
+            state=nba.state.value if hasattr(nba.state, 'value') else str(nba.state),
+            reason=nba.plain_english_reason,
+            support_options=nba.support_options,
+        )
+
+    return EvaluateIntentResponse(
+        allowed=True,
+        state=nba.state.value if hasattr(nba.state, 'value') else str(nba.state),
+        reason="Action is permitted. Customer's financial health supports this.",
+    )

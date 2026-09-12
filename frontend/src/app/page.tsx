@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
  * Landing/redirect page for Saarthi.
  * Automatically redirects the user to the main /dashboard route.
  */
-export function Home() {
+function Home() {
   const router = useRouter();
 
   useEffect(() => {
