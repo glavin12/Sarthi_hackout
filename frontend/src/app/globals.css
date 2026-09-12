@@ -1,0 +1,126 @@
+/* ── Saarthi Design System ── */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Gujarati:wght@300;400;500&display=swap');
+
+@layer base {
+  :root {
+    --bg-primary: #0A0A0B;
+    --bg-card: rgba(17, 17, 19, 0.7); /* Translucent for glass effect */
+    --bg-elevated: rgba(24, 24, 27, 0.8);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-active: rgba(255, 255, 255, 0.2);
+    --accent-healthy: #00D4AA;
+    --accent-vulnerable: #F59E0B;
+    --accent-stressed: #EF4444;
+    --accent-fraud: #F97316;
+    --text-primary: #FAFAFA;
+    --text-secondary: #A1A1AA;
+    --text-muted: #52525B;
+  }
+
+  html {
+    font-size: 18px; /* Scales up the entire UI */
+  }
+
+  body {
+    @apply bg-saarthi-bg text-saarthi-text-primary font-sans antialiased bg-fixed;
+    /* Very subtle gradient background for depth */
+    background-image: radial-gradient(circle at 50% 0%, rgba(0, 212, 170, 0.03) 0%, transparent 70%);
+  }
+
+  * {
+    @apply border-saarthi-border-subtle;
+  }
+}
+
+@layer components {
+  /* High-end interactive cards with glassmorphism and smooth lift */
+  .card {
+    @apply bg-saarthi-card backdrop-blur-xl border border-saarthi-border-subtle rounded-xl p-5 
+           transition-all duration-500 ease-out shadow-lg shadow-black/20;
+    will-change: transform, border-color, box-shadow;
+  }
+
+  .card:hover {
+    @apply border-saarthi-border-active shadow-xl shadow-black/40 -translate-y-1;
+    background-color: rgba(24, 24, 27, 0.85); /* Slightly brighter on hover */
+  }
+
+  /* Animated gradient border glow effect for special cards */
+  .card-glow {
+    position: relative;
+  }
+  .card-glow::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(to bottom right, var(--accent-healthy), transparent 40%);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0.3;
+    transition: opacity 0.5s ease;
+  }
+  .card-glow:hover::before {
+    opacity: 0.8;
+  }
+
+  .pill {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium transition-all duration-300;
+  }
+
+  .pill-healthy {
+    @apply bg-saarthi-healthy/15 text-saarthi-healthy border border-saarthi-healthy/20 shadow-[0_0_10px_rgba(0,212,170,0.1)];
+  }
+
+  .pill-vulnerable {
+    @apply bg-saarthi-vulnerable/15 text-saarthi-vulnerable border border-saarthi-vulnerable/20;
+  }
+
+  .pill-stressed {
+    @apply bg-saarthi-stressed/15 text-saarthi-stressed border border-saarthi-stressed/20 shadow-[0_0_10px_rgba(239,68,68,0.1)];
+  }
+
+  .pill-fraud {
+    @apply bg-saarthi-fraud/15 text-saarthi-fraud border border-saarthi-fraud/20;
+  }
+
+  /* Professional interactive buttons */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-saarthi-healthy text-saarthi-bg text-sm font-medium rounded-lg
+           hover:bg-saarthi-healthy/90 hover:shadow-[0_0_15px_rgba(0,212,170,0.4)] active:scale-95 transition-all duration-300 ease-out;
+  }
+
+  .btn-outline {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 border border-saarthi-border-active bg-saarthi-elevated/50 text-saarthi-text-secondary text-sm font-normal rounded-lg
+           hover:bg-saarthi-elevated hover:border-saarthi-text-secondary hover:text-saarthi-text-primary active:scale-95 transition-all duration-300 ease-out;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-saarthi-stressed/15 text-saarthi-stressed text-sm font-medium rounded-lg border border-saarthi-stressed/30
+           hover:bg-saarthi-stressed hover:text-white hover:shadow-[0_0_15px_rgba(239,68,68,0.4)] active:scale-95 transition-all duration-300 ease-out;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
