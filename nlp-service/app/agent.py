@@ -1,8 +1,7 @@
 """Saarthi's LLM agent: Gemini tool-calling over the data-service helpers."""
 import functools
 
-from app.clients import get_customer, get_transactions
-from app.signals import compute_signals
+from app.clients import get_customer, get_transactions, get_decision, evaluate_intent
 from app.journeys import get_state as journey_get_state, advance as journey_advance
 
 
@@ -14,6 +13,10 @@ SAARTHI_SYSTEM_PROMPT = """You are Saarthi, an AI banking assistant for Indian c
 
 CRITICAL RULE — STRESS PIVOT:
 If the customer's intent is "loan_request", you MUST call `compute_financial_signals` first. If the returned `is_stressed` is true (missed EMIs, high EMI burden, or declining balance), DO NOT recommend a new loan. Instead, acknowledge the pressure with empathy, offer support (budgeting, restructuring existing dues, calling a human advisor), and explain WHY you are pausing the loan option. This is non-negotiable — customer wellbeing outranks conversion.
+
+IMPORTANT: When calling `compute_financial_signals`, the response now comes from the Decision Engine, not a local calculation. The `customer_state` field tells you the canonical state (healthy, vulnerable, stressed, fraud_risk). Trust this over any local assessment.
+
+Before proceeding with any loan-related intent, call `check_intent_allowed(customer_id, "loan_request")`. If `allowed` is false, do NOT offer the loan — pivot to support.
 
 Available context (passed in the input):
 - customer_id: <int>
@@ -41,10 +44,35 @@ def fetch_transactions(customer_id: int) -> list[dict]:
 
 
 def compute_financial_signals(customer_id: int) -> dict:
-    """Compute financial health signals: monthly_income, essential_spend, emi_burden, foir,
-    missed_emi_count, anomaly_count, balance_trend, is_stressed.
-    ALWAYS call this before giving any loan advice, to check if the customer is financially stressed."""
-    return compute_signals(get_transactions(customer_id))
+    """Get the customer's financial state from the Decision Engine (the single source of truth).
+    Returns state, signals, action, reason, and whether stress guardrails are active."""
+    try:
+        result = get_decision(customer_id)
+        data = result.get("data", {})
+        return {
+            "customer_state": data.get("state", "unknown"),
+            "action": data.get("action", "do_nothing"),
+            "title": data.get("title", ""),
+            "message": data.get("message", ""),
+            "reason": data.get("plain_english_reason", ""),
+            "guardrail_applied": data.get("guardrail_applied", False),
+            "is_stressed": data.get("state") in ("stressed", "fraud_risk"),
+            "signals": data.get("signals", {}),
+        }
+    except Exception as e:
+        # Fallback: if Decision Engine is unreachable, use local computation
+        from app.signals import compute_signals
+        local = compute_signals(get_transactions(customer_id))
+        return local
+
+
+def check_intent_allowed(customer_id: int, proposed_action: str) -> dict:
+    """Check with the Decision Engine's guardrails if a proposed action (like loan_request) is allowed for this customer.
+    ALWAYS call this before proceeding with a loan or credit product request."""
+    try:
+        return evaluate_intent(customer_id, proposed_action)
+    except Exception:
+        return {"allowed": True, "state": "unknown", "reason": "Could not verify. Proceed with caution."}
 
 
 def get_journey_state(customer_id: int) -> dict | None:
@@ -84,6 +112,7 @@ def _get_executor():
         StructuredTool.from_function(fetch_customer),
         StructuredTool.from_function(fetch_transactions),
         StructuredTool.from_function(compute_financial_signals),
+        StructuredTool.from_function(check_intent_allowed),
         StructuredTool.from_function(get_journey_state),
         StructuredTool.from_function(advance_journey),
     ]

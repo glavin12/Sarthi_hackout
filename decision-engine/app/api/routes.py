@@ -1,17 +1,19 @@
 import httpx
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
+from app.adapters import adapt_customer, adapt_transactions
 from app.core.config import settings
+from app.core.demo_personas import (
+    get_fraud_priya,
+    get_healthy_ramesh,
+    get_stressed_ramesh,
+)
 from app.engine.pipeline import run_decision_engine
 from app.schemas.models import (
     CustomerProfile,
     DecideRequest,
     DecideResponse,
     Transaction,
-)
-from tests.fixtures.personas import (
-    get_fraud_priya,
-    get_healthy_ramesh,
-    get_stressed_ramesh,
 )
 
 router = APIRouter()
@@ -82,7 +84,7 @@ async def decide_next_best_action(request: DecideRequest):
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 cust_resp = await client.get(
-                    f"{settings.DATA_SERVICE_URL}/api/v1/customers/{request.customer_id}"
+                    f"{settings.DATA_SERVICE_URL}/customers/{request.customer_id}"
                 )
                 if cust_resp.status_code != 200:
                     raise HTTPException(
@@ -90,14 +92,14 @@ async def decide_next_best_action(request: DecideRequest):
                         detail=f"Customer '{request.customer_id}' not found in Data Service ({settings.DATA_SERVICE_URL}).",
                     )
                 cust_data = cust_resp.json()
-                customer = CustomerProfile(**cust_data)
+                customer = adapt_customer(cust_data)
 
                 txns_resp = await client.get(
-                    f"{settings.DATA_SERVICE_URL}/api/v1/customers/{request.customer_id}/transactions"
+                    f"{settings.DATA_SERVICE_URL}/customers/{request.customer_id}/transactions"
                 )
                 if txns_resp.status_code == 200:
                     txns_data = txns_resp.json()
-                    transactions = [Transaction(**t) for t in txns_data]
+                    transactions = adapt_transactions(txns_data)
                 else:
                     transactions = []
         except httpx.RequestError as exc:
@@ -110,3 +112,41 @@ async def decide_next_best_action(request: DecideRequest):
     nba = run_decision_engine(customer, transactions)
 
     return DecideResponse(success=True, data=nba)
+
+
+class EvaluateIntentRequest(BaseModel):
+    customer_id: str
+    proposed_action: str  # e.g. "loan_request", "balance_check"
+
+
+class EvaluateIntentResponse(BaseModel):
+    allowed: bool
+    state: str
+    reason: str
+    support_options: list[str] | None = None
+
+
+@router.post("/evaluate-intent", response_model=EvaluateIntentResponse, tags=["Decision Engine"])
+async def evaluate_intent(request: EvaluateIntentRequest):
+    """Lightweight guardrail check for chatbot: can this customer do this action?"""
+    # Reuse the /decide logic to get customer state
+    decide_req = DecideRequest(customer_id=request.customer_id)
+    result = await decide_next_best_action(decide_req)
+    nba = result.data
+
+    loan_actions = {"loan_request", "apply_loan", "personal_loan", "home_loan"}
+    is_loan = request.proposed_action in loan_actions
+
+    if nba.state in ("stressed", "fraud_risk") and is_loan:
+        return EvaluateIntentResponse(
+            allowed=False,
+            state=nba.state.value if hasattr(nba.state, 'value') else str(nba.state),
+            reason=nba.plain_english_reason,
+            support_options=nba.support_options,
+        )
+
+    return EvaluateIntentResponse(
+        allowed=True,
+        state=nba.state.value if hasattr(nba.state, 'value') else str(nba.state),
+        reason="Action is permitted. Customer's financial health supports this.",
+    )

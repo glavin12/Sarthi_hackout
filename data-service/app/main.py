@@ -13,6 +13,7 @@ from datetime import date
 from enum import Enum
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .seed import build_dataset
@@ -85,6 +86,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SAARTHI data-service", version="1.0.0", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # --- response / request models ---
 class Customer(BaseModel):
@@ -125,6 +134,11 @@ def _require_customer(conn: sqlite3.Connection, customer_id: int) -> sqlite3.Row
 
 
 # --- endpoints ---
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "data-service"}
+
+
 @app.get("/customers", response_model=list[Customer])
 def list_customers():
     conn = get_db()

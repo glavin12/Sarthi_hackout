@@ -3,7 +3,8 @@ WORKDIR /app
 ENV HF_HOME=/app/.cache/huggingface \
     TORCH_HOME=/app/.cache/torch \
     XDG_CACHE_HOME=/app/.cache \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DECISION_ENGINE_URL=http://decision-engine:8001
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
