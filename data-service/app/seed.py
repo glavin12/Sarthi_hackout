@@ -70,6 +70,16 @@ PERSONAS = [
 ]
 
 
+# Opening balance per persona — drives the `balance_after_txn` running total the
+# /api/v1 canonical layer exposes (and hence decision-engine's balance_trend).
+START_BALANCE = {
+    "stable_salaried": 80000,     # comfortable buffer, rises with surplus
+    "gig_worker": 30000,
+    "small_business": 150000,
+    "near_stress_family": 25000,  # thin buffer, trends down
+}
+
+
 def _month_starts(today: date, n: int) -> list[date]:
     """First-of-month dates for the last `n` months, oldest first, ending in
     today's month."""
@@ -136,11 +146,9 @@ def _generate_transactions(cfg: dict, rng: random.Random, month_starts: list[dat
             amt = rng.randint(*cfg["upi_amount"])
             add(_day(ms, rng.randint(1, 28)), -amt, "upi", "UPI payment")
 
-    # --- occasional historical anomaly (~40% of personas get one) ---
-    if rng.random() < 0.4:
-        ms = rng.choice(month_starts)
-        add(_day(ms, rng.randint(1, 28)), -rng.randint(20000, 45000),
-            "suspicious_debit", "Unusual debit (02:14) - unknown merchant", anomaly=1)
+    # No historical fraud anomalies: a late-night high debit in history would make
+    # the /api/v1 fraud heuristic flag an otherwise-healthy persona at baseline.
+    # Fraud is triggered only via inject-event (suspicious_debit).
 
     # Drop future-dated rows (current month's later days) so history ends today
     # and an injected today-dated event is the newest transaction.

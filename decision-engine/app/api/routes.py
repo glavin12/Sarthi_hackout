@@ -1,7 +1,6 @@
 import httpx
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-from app.adapters import adapt_customer, adapt_transactions
 from app.core.config import settings
 from app.core.demo_personas import (
     get_fraud_priya,
@@ -79,12 +78,12 @@ async def decide_next_best_action(request: DecideRequest):
     if (not customer or not transactions) and request.customer_id in DEMO_PERSONAS:
         customer, transactions = DEMO_PERSONAS[request.customer_id]()
 
-    # Case 2: Fetch from Data Service via HTTP
+    # Case 2: Fetch from Data Service canonical API (returns DE-compatible format)
     if not customer or transactions is None:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 cust_resp = await client.get(
-                    f"{settings.DATA_SERVICE_URL}/customers/{request.customer_id}"
+                    f"{settings.DATA_SERVICE_URL}/api/v1/customers/{request.customer_id}"
                 )
                 if cust_resp.status_code != 200:
                     raise HTTPException(
@@ -92,14 +91,14 @@ async def decide_next_best_action(request: DecideRequest):
                         detail=f"Customer '{request.customer_id}' not found in Data Service ({settings.DATA_SERVICE_URL}).",
                     )
                 cust_data = cust_resp.json()
-                customer = adapt_customer(cust_data)
+                customer = CustomerProfile(**cust_data)
 
                 txns_resp = await client.get(
-                    f"{settings.DATA_SERVICE_URL}/customers/{request.customer_id}/transactions"
+                    f"{settings.DATA_SERVICE_URL}/api/v1/customers/{request.customer_id}/transactions"
                 )
                 if txns_resp.status_code == 200:
                     txns_data = txns_resp.json()
-                    transactions = adapt_transactions(txns_data)
+                    transactions = [Transaction(**t) for t in txns_data]
                 else:
                     transactions = []
         except httpx.RequestError as exc:

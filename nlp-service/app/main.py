@@ -6,6 +6,7 @@ load_dotenv()  # must run before any module reads env vars
 
 import logging
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.intents import classify
@@ -15,6 +16,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("saarthi-nlp")
 
 app = FastAPI(title="Saarthi NLP Service", version="1.0.0")
+
+# Browser (frontend) calls /chat directly.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class ChatRequest(BaseModel):

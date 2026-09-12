@@ -6,7 +6,7 @@ services:
     environment:
       DATA_DB_PATH: /app/data.db
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/customers"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -18,8 +18,7 @@ services:
     environment:
       DATA_SERVICE_URL: http://data-service:8000
     depends_on:
-      data-service:
-        condition: service_started
+      - data-service
 
   nlp-service:
     build: ./nlp-service
@@ -28,20 +27,22 @@ services:
     environment:
       DATA_SERVICE_URL: http://data-service:8000
       DECISION_ENGINE_URL: http://decision-engine:8001
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
     depends_on:
       - data-service
       - decision-engine
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_DATA_SERVICE_URL: http://localhost:8000
+        NEXT_PUBLIC_DECISION_ENGINE_URL: http://localhost:8001
+        NEXT_PUBLIC_NLP_URL: http://localhost:8002
     ports:
       - "3000:3000"
-    environment:
-      NEXT_PUBLIC_DECISION_ENGINE_URL: http://localhost:8001
-      NEXT_PUBLIC_NLP_SERVICE_URL: http://localhost:8002
-      NEXT_PUBLIC_DATA_SERVICE_URL: http://localhost:8000
     depends_on:
+      - data-service
       - decision-engine
       - nlp-service

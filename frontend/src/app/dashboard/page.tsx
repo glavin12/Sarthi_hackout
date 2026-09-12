@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { AlertCircle, Wifi, WifiOff } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import {
   CustomerState,
   NextBestAction,
@@ -14,9 +14,9 @@ import {
   healthyState,
   healthyNBA,
   healthyBalanceHistory,
-  stressedBalanceHistory,
   resolveStateAfterEvent,
 } from "@/mocks/data";
+import { getDecision, getBalanceHistory, injectEvent } from "@/lib/api";
 import { PageShell } from "@/components/layout/page-shell";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { HealthGauge } from "@/components/dashboard/health-gauge";
@@ -25,112 +25,38 @@ import { RecommendationCard } from "@/components/dashboard/recommendation-card";
 import { StressBanner } from "@/components/dashboard/stress-banner";
 import { FraudAlert } from "@/components/dashboard/fraud-alert";
 import { DemoControls } from "@/components/dashboard/demo-controls";
-import { getDecision, injectEvent as apiInjectEvent } from "@/lib/api";
-
-const CUSTOMER_ID = 1; // Default demo customer
-
-function mapApiToState(apiData: any): { state: CustomerState; nba: NextBestAction } {
-  const d = apiData?.data || apiData;
-  const signals = d.signals || {};
-  
-  const stateMap: Record<string, number> = {
-    healthy: 82, vulnerable: 55, stressed: 28, fraud_risk: 15,
-  };
-  
-  const customerState: CustomerState = {
-    state: d.state || "healthy",
-    signals: {
-      income_regularity: signals.income_regularity_score || 0.9,
-      savings_rate: (signals.savings_rate || 0) * 100,
-      foir: signals.foir || 0,
-      balance_trend: signals.balance_trend === "sharp_decline" ? "falling" : signals.balance_trend || "stable",
-      spending_mix: { salary: 0, rent: 0, emi: 0, grocery: 0, upi: 0, utilities: 0, entertainment: 0, medical: 0, education: 0, transfer: 0, atm: 0, other: 0 },
-      monthly_income: signals.monthly_income || 0,
-      monthly_expenses: signals.essential_spend || 0,
-      monthly_savings: signals.savings_amount || 0,
-      monthly_emis: signals.monthly_emi || 0,
-      essential_spend: signals.essential_spend || 0,
-    },
-    why: d.plain_english_reason || "",
-    score: stateMap[d.state] || 50,
-  };
-
-  const actionMap: Record<string, string> = {
-    recommend_product: "recommend",
-    budgeting_assistance: "guide",
-    debt_support_call: "support",
-    fraud_alert_verify: "verify",
-    do_nothing: "nothing",
-  };
-
-  const nba: NextBestAction = {
-    action: (actionMap[d.action] || "recommend") as any,
-    payload: {
-      title: d.title || "",
-      description: d.message || "",
-      cta_text: d.state === "stressed" ? "Get support" : d.state === "fraud_risk" ? "Block & Report" : "Learn more",
-      product: d.recommended_product || undefined,
-    },
-    reason: d.plain_english_reason || "",
-    guardrail_passed: !d.guardrail_applied,
-  };
-
-  return { state: customerState, nba };
-}
 
 export default function DashboardPage() {
   const [customerState, setCustomerState] = useState<CustomerState>(healthyState);
   const [nba, setNba] = useState<NextBestAction>(healthyNBA);
   const [balanceHistory, setBalanceHistory] = useState<BalancePoint[]>(healthyBalanceHistory);
+  const [customerName, setCustomerName] = useState<string>(mockCustomer.name);
   const [activeDemoEvent, setActiveDemoEvent] = useState<DemoEvent | null>(null);
-  const [isLive, setIsLive] = useState(false);
-  const [loading, setLoading] = useState(true);
 
-  const fetchDecision = useCallback(async () => {
-    try {
-      const result = await getDecision(CUSTOMER_ID);
-      const { state, nba: mappedNba } = mapApiToState(result);
-      setCustomerState(state);
-      setNba(mappedNba);
-      setIsLive(true);
-      // Update balance history based on state
-      if (state.state === "stressed" || state.state === "fraud_risk") {
-        setBalanceHistory(stressedBalanceHistory);
-      } else {
-        setBalanceHistory(healthyBalanceHistory);
-      }
-    } catch (err) {
-      console.warn("Decision Engine unreachable, using mock data:", err);
-      setIsLive(false);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const refresh = async () => {
+    const decision = await getDecision();
+    setCustomerName(decision.customerName);
+    setCustomerState(decision.state);
+    setNba(decision.nba);
+    setBalanceHistory(await getBalanceHistory());
+  };
 
   useEffect(() => {
-    fetchDecision();
-  }, [fetchDecision]);
+    refresh().catch((e) => console.warn("Backend unavailable, using mock data:", e));
+  }, []);
 
   const handleInjectEvent = async (event: DemoEvent) => {
     setActiveDemoEvent(event);
-    
-    if (isLive) {
-      try {
-        // Call Data Service to inject the event
-        await apiInjectEvent(CUSTOMER_ID, event);
-        // Re-fetch decision with updated data
-        await fetchDecision();
-        return;
-      } catch (err) {
-        console.warn("API inject failed, falling back to mock:", err);
-      }
+    try {
+      await injectEvent(event);
+      await refresh();
+    } catch (e) {
+      console.warn("Inject via backend failed, using mock resolver:", e);
+      const resolved = resolveStateAfterEvent(customerState, event);
+      setCustomerState(resolved.state);
+      setNba(resolved.nba);
+      setBalanceHistory(resolved.balance);
     }
-    
-    // Fallback to mock resolution
-    const resolved = resolveStateAfterEvent(customerState, event);
-    setCustomerState(resolved.state);
-    setNba(resolved.nba);
-    setBalanceHistory(resolved.balance);
   };
 
   const isFraudRisk = customerState.state === "fraud_risk";
@@ -139,16 +65,6 @@ export default function DashboardPage() {
   return (
     <PageShell>
       <div className="space-y-5 max-w-6xl mx-auto pb-16">
-        {/* Connection status indicator */}
-        <div className="flex items-center gap-1.5 text-[10px] text-saarthi-text-muted">
-          {isLive ? (
-            <><Wifi className="w-3 h-3 text-saarthi-healthy" /> Live — Connected to Saarthi backends</>
-          ) : (
-            <><WifiOff className="w-3 h-3 text-saarthi-stressed" /> Offline — Using demo data</>
-          )}
-        </div>
-
-        {/* Greeting */}
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -157,7 +73,7 @@ export default function DashboardPage() {
         >
           <div>
             <h1 className="text-xl font-light text-saarthi-text-primary tracking-tight">
-              Namaste, {mockCustomer.name} 👋
+              Namaste, {customerName} 👋
             </h1>
             <p className="text-xs font-light text-saarthi-text-secondary mt-0.5">
               Financial vitals and automated guardrails
@@ -206,10 +122,7 @@ export default function DashboardPage() {
           </div>
         </motion.div>
       </div>
-
       <DemoControls onInjectEvent={handleInjectEvent} activeEvent={activeDemoEvent} />
     </PageShell>
   );
 }
-
-export { DashboardPage };
