@@ -1,124 +1,257 @@
-# SAARTHI
+# Saarthi
 
-AI-powered personal banking layer. Multi-service demo with four wired services.
+**AI-Powered Hyper-Personalized Banking for Bharat.**
 
-## Services
+A conversational, multilingual banking co-pilot that reads a customer's real financial life, decides responsibly, and protects the borrower — not just the balance sheet.
 
-| Service | Port | Role |
+> Built by **Team AlphaQ**
+
+---
+
+## Why Saarthi
+
+Most digital lending apps in India ship one product, one language, and zero awareness of the borrower's actual financial state. Saarthi flips that:
+
+- **Understand** — reads 18 months of real transaction data.
+- **Decide** — classifies the customer as *healthy · vulnerable · stressed · fraud-risk* and picks the next best action.
+- **Assist** — chats and speaks in English, Hindi, and Gujarati, grounded in the customer's own numbers.
+- **Protect** — automatic guardrails pause new lending and offer restructuring when the customer is under pressure.
+
+---
+
+## Architecture
+
+Four small services. Each does one thing.
+
+```
+                   ┌─────────────────────────────────────┐
+                   │       Next.js 14  Frontend          │
+                   │   Dashboard · Chat · Loans · Goals  │
+                   │       :3000                         │
+                   └───────────────┬─────────────────────┘
+                                   │
+             ┌─────────────────────┼─────────────────────┐
+             ▼                     ▼                     ▼
+    ┌──────────────┐      ┌────────────────┐    ┌────────────────┐
+    │ data-service │      │ decision-engine│    │   nlp-service  │
+    │   FastAPI    │◄─────│    FastAPI     │    │     FastAPI    │
+    │   SQLite     │      │  scikit-learn  │    │  google-genai  │
+    │    :8000     │      │      :8001     │    │      :8002     │
+    └──────────────┘      └────────────────┘    └───────┬────────┘
+                                                        │
+                                                        ▼
+                                                 ┌──────────────┐
+                                                 │ Gemini 3.1   │
+                                                 │  Google AI   │
+                                                 └──────────────┘
+```
+
+| Service | Port | Responsibility |
 |---|---|---|
-| **data-service** | 8000 | SQLite source of truth: synthetic personas, transactions, demo levers |
-| **decision-engine** | 8001 | The AI brain: signals → state → Next-Best-Action + anti-predatory guardrail |
-| **nlp-service** | 8002 | Vernacular chat (Gemini); reads data-service |
-| **frontend** | 3000 | Next.js adaptive dashboard + chat |
+| **data-service** | `8000` | SQLite source of truth. Personas, 18-month transaction history, auth (PBKDF2), demo event injector, canonical `/api/v1` shape. |
+| **decision-engine** | `8001` | Turns raw signals into a customer state (`healthy` / `vulnerable` / `stressed` / `fraud_risk`) and a Next-Best-Action with a guardrail flag. |
+| **nlp-service** | `8002` | Gemini-backed multilingual chat. Grounds every reply in the customer's real signals and current journey step. |
+| **frontend** | `3000` | Next.js 14, Tailwind, Framer Motion. Adaptive dashboard, guided loan journey, voice-enabled chat. |
 
-### How they connect
+---
 
+## Features
+
+### Auth & session
+- `/auth/register` and `/auth/login` on data-service (PBKDF2 hashing, unique-email + regex validation).
+- 4 seeded accounts + open sign-up.
+- Session stored client-side; every backend call carries the logged-in `customer_id`.
+
+### Adaptive dashboard
+- Live financial health score (0-100) that shifts with the customer's state.
+- Metric cards for income, essentials, savings, EMIs — real numbers from the decision engine.
+- Applied loans appear as an "Active loans" card and adjust the EMI + savings figures.
+- New-user onboarding: no fabricated metrics — a genuine empty state with three starter actions.
+
+### Multilingual voice chat
+- **Text + voice** in English (`en-IN`), Hindi (`hi-IN`), Gujarati (`gu-IN`).
+- Voice input via the browser's Web Speech API — no cloud STT dependency, no npm package.
+- Auto-detects the script of the user's message and replies in the same language.
+- Polite "I don't know" fallback in the user's language when the query is off-topic.
+- Fresh chat on language switch (no mixed-script transcripts).
+
+### Guided loan journey
+- 6 steps: intent → info → eligibility → options → documents → apply.
+- Real document upload from device via `<input type="file">`.
+- On submit, the loan is persisted per user; the dashboard reflects the new EMI immediately.
+
+### Goals
+- Savings-goal tracker with progress bars, contributions, and per-user persistence.
+
+### Settings
+- Editable display name, notification toggles, prominent sign-out card, local-data wipe.
+
+---
+
+## Quick start
+
+### Prerequisites
+- **Python** 3.11+
+- **Node.js** 20+
+- **npm** 10+
+- **Gemini API key** (get one at [aistudio.google.com](https://aistudio.google.com/app/apikey))
+
+### 1. Clone
+
+```bash
+git clone https://github.com/glavin12/Sarthi_hackout.git
+cd Sarthi_hackout
 ```
-browser ── frontend :3000
-   ├─ POST decision-engine :8001 /decide {customer_id}        → state + NBA
-   ├─ POST data-service    :8000 /customers/{id}/inject-event → demo levers
-   ├─ GET  data-service    :8000 /api/v1/customers/{id}/transactions → balance chart
-   └─ POST nlp-service     :8002 /chat {customer_id,text,lang}
 
-decision-engine ── GET data-service /api/v1/customers/{id}[/transactions]
-nlp-service     ── GET data-service /customers/{id}[/transactions]
+### 2. Gemini key
+
+```bash
+cp nlp-service/.env.example nlp-service/.env
+# edit nlp-service/.env and paste your GEMINI_API_KEY
 ```
 
-decision-engine consumes the **canonical `/api/v1`** shape; nlp-service consumes
-the raw `/customers` shape. Backend→backend calls use docker service names;
-the browser uses `localhost` (frontend `NEXT_PUBLIC_*`, baked at build time).
+### 3. Install & run each service
 
-### Run the full stack
+Open four terminals.
+
+```bash
+# terminal 1 — data-service
+pip install -r data-service/requirements.txt
+cd data-service && python -m uvicorn app.main:app --port 8000
+```
+
+```bash
+# terminal 2 — decision-engine
+pip install -r decision-engine/requirements.txt
+cd decision-engine && python -m uvicorn app.main:app --port 8001
+```
+
+```bash
+# terminal 3 — nlp-service
+pip install -r nlp-service/requirements.txt
+cd nlp-service && python -m uvicorn app.main:app --port 8002
+```
+
+```bash
+# terminal 4 — frontend
+cd frontend && npm install && npm run dev
+```
+
+### 4. Open
+
+Visit **http://localhost:3000** and either sign in as a seeded account or create a new one.
+
+### One-shot: Docker
 
 ```bash
 docker compose up --build
 ```
 
-Boots all four services. Open the dashboard at http://localhost:3000/dashboard,
-then use the **Demo Controls** (bottom-right) to inject events and watch the state
-flip live. Set `GEMINI_API_KEY` in your environment for live chat (otherwise the
-frontend falls back to canned replies).
+(Set `GEMINI_API_KEY` in your shell first.)
 
-To run a service directly, see its folder; each exposes `/docs`.
+---
 
-### Canonical `/api/v1` contract (what decision-engine consumes)
+## Demo accounts
 
-data-service maps its stored rows into this shape on the fly — no separate storage:
+| Email | Password | Persona |
+|---|---|---|
+| `ramesh@saarthi.in` | `ramesh@123` | Stable Salaried |
+| `priya@saarthi.in`  | `priya@123`  | Gig Worker |
+| `amit@saarthi.in`   | `amit@123`   | Small Business |
+| `sunita@saarthi.in` | `sunita@123` | Near-stress Family |
 
-- **Customer**: `customer_id` (str), `name`, `consent_given`, `stated_monthly_income`, `account_created_at`
-- **Transaction**: `txn_id`, `customer_id`, `timestamp` (ISO datetime), `amount` (≥0; direction in `type`), `type` (`CREDIT`/`DEBIT`), `category` (UPPERCASE: SALARY/EMI/RENT/GROCERIES/UTILITIES/TRANSFER/OTHER), `merchant`, `balance_after_txn`, `is_recurring`, `status` (`SUCCESS`/`BOUNCED`)
+New accounts start with an honest empty dashboard until they add data.
 
-A `missed_emi` event surfaces as a `BOUNCED` `EMI` row; a `suspicious_debit` as a
-large late-night (02:47) `DEBIT` — the signals decision-engine keys off.
+---
 
-## data-service (port 8000)
+## Demo script (≈ 2 minutes)
 
-SQLite-backed store of 4 synthetic personas — `stable_salaried`, `gig_worker`,
-`small_business`, `near_stress_family` — each with 18 months of realistic
-transactions. Personas are generated once on startup if the DB is empty. It is
-pure storage + a generator; it computes **no** financial state (downstream
-services do that). Injected events just append distinctively-typed rows that flip
-the demo.
+1. **Sign in** as `ramesh@saarthi.in` — dashboard loads with real 18-month signals.
+2. Open **/chat**, switch to **हिं**, and ask *"मुझे होम लोन की जानकारी चाहिए"*. Gemini replies in Hindi, grounded in Ramesh's actual numbers.
+3. Tap the **mic**, speak in Hindi or Gujarati — the transcript lands in the input.
+4. Trigger a stress state (e.g. missed EMI via `/customers/1/inject-event`). Ask for a loan again — **Saarthi refuses** and offers restructuring instead.
+5. Walk the **loan journey** to submission — the new EMI shows up on the dashboard the next second.
 
-**Amount convention:** signed integer rupees — credits `+`, debits `−`.
+---
 
-### Run locally
+## Repository layout
 
-```bash
-pip install -r data-service/requirements.txt
-cd data-service && uvicorn app.main:app --port 8000
+```
+Sarthi_hackout/
+├── data-service/          # FastAPI · SQLite · auth · personas
+│   ├── app/
+│   │   ├── main.py        # endpoints
+│   │   └── seed.py        # persona + transaction generator
+│   └── tests/
+├── decision-engine/       # FastAPI · scikit-learn · rules
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── engine/        # signals → state → NBA
+│   │   └── adapters.py
+│   └── tests/
+├── nlp-service/           # FastAPI · google-genai · Gemini
+│   ├── app/
+│   │   ├── agent.py       # grounded prompt + reply
+│   │   ├── intents.py     # multilingual intent classifier
+│   │   ├── journeys.py
+│   │   └── main.py
+│   └── tests/
+├── frontend/              # Next.js 14 · Tailwind · Framer Motion
+│   └── src/
+│       ├── app/           # /welcome /dashboard /chat /loan-journey /goals /settings
+│       ├── components/
+│       ├── lib/           # api · auth · speech · loans · goals · prefs
+│       └── mocks/
+└── docker-compose.yml
 ```
 
-Open http://localhost:8000/docs for the interactive API.
+---
 
-### Seed / inspect the DB
+## Tech stack
 
-The DB **auto-seeds on startup**, so `uvicorn ...` or `docker compose up` needs
-nothing extra — the personas + 18 months of transactions are generated the first
-time the service boots against an empty DB.
+**Backend:** FastAPI · SQLite · scikit-learn · google-genai · sentence-transformers
+**Frontend:** Next.js 14 · React 18 · TypeScript · Tailwind CSS · Framer Motion · Recharts
+**AI:** Gemini 3.1 (Google) · Web Speech API (browser-native voice I/O)
+**Auth:** PBKDF2-HMAC-SHA256 (100k iterations)
 
-To fill (or verify) the DB **without** running the server:
+---
 
-```bash
-cd data-service && python seed_db.py
-```
-
-The SQLite file is created at `data-service/data.db` (or wherever `DATA_DB_PATH`
-points). Seeding is guarded on empty, so re-running is a no-op — to reseed from
-scratch, delete `data.db` first.
-
-### Endpoints (no auth)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET  | `/customers` | list all personas |
-| GET  | `/customers/{id}` | one persona |
-| GET  | `/customers/{id}/transactions` | that persona's transactions, newest-first |
-| POST | `/customers/{id}/inject-event` | fire a demo lever (body `{"event": "..."}`) |
-
-### Demo levers (`inject-event`)
-
-`event` is one of `missed_emi` | `income_drop` | `suspicious_debit` | `salary_hike`.
-Each appends a current-dated row:
-
-- `missed_emi` → `type=emi_missed`, amount 0 (skipped-payment marker)
-- `income_drop` → a `salary` credit at ~50% of baseline
-- `suspicious_debit` → a large negative `suspicious_debit` with `is_anomaly=1`
-- `salary_hike` → a `salary` credit at ~130% of baseline
+## Testing
 
 ```bash
-curl -X POST http://localhost:8000/customers/1/inject-event \
-  -H "Content-Type: application/json" -d '{"event":"missed_emi"}'
+# data-service
+cd data-service && pytest -q         # 16 tests
+
+# decision-engine
+cd decision-engine && pytest -q
+
+# frontend type-check
+cd frontend && npx tsc --noEmit
 ```
 
-### Reset
+---
 
-No reset endpoint — injected events persist. To reset to the clean generated
-state, recreate the DB: delete `data-service/data.db` locally, or
-`docker compose down && docker compose up --build`.
+## Environment variables
 
-### Tests
+| Var | Service | Purpose |
+|---|---|---|
+| `GEMINI_API_KEY` | nlp-service | Required for live chat. |
+| `GEMINI_MODEL` | nlp-service | Model id (default `gemini-2.5-flash`). |
+| `DATA_SERVICE_URL` | nlp-service, decision-engine | Backend-to-backend URL (default `http://localhost:8000`). |
+| `DECISION_ENGINE_URL` | nlp-service | Default `http://localhost:8001`. |
+| `NEXT_PUBLIC_DATA_SERVICE_URL` | frontend | Baked at build time (default `http://localhost:8000`). |
+| `NEXT_PUBLIC_DECISION_ENGINE_URL` | frontend | Default `http://localhost:8001`. |
+| `NEXT_PUBLIC_NLP_URL` | frontend | Default `http://localhost:8002`. |
+| `DATA_DB_PATH` | data-service | SQLite file (default `data.db`). |
 
-```bash
-cd data-service && pytest -q
-```
+---
+
+## Team
+
+**Team AlphaQ** — *Digital Transformation in Lending*
+
+---
+
+## License
+
+Educational / hackathon use. See individual service directories for any additional notes.
